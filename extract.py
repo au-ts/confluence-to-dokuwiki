@@ -33,15 +33,6 @@ users={}
 
 attachments = {}
 
-# user_mapping={
-#     "kne020":"Leonie Kneipp",
-#     "and501":"jandronick",
-#     "buc156":"sbuckley",
-#     "buc13c":"mitchellb",
-#     "chu090":"peterc",
-#     "mon13k":"lmondy",
-# }
-    
 
 # Eventually add in an ldap lookup to convert to local user 
 class ConfluenceUser:
