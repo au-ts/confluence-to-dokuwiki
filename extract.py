@@ -2,6 +2,7 @@
 import sys
 import os
 import shutil
+import re
 from mappings import userMapping
 import xml.etree.ElementTree as ET
 from markdownify import markdownify
@@ -66,13 +67,15 @@ class Page:
         self.attaches = attaches
         pages[id] = self
         if title:
-            self.filename = title.replace(' ', '_').replace('&', 'and').replace('/','_')
+            self.filename = page_name_to_filename(title)
         else:
             self.filename = '__unknown__'
-        pageNames[title] = self
+        self.fullpath = self.filename
+        self.tag = self.filename
         if title not in hiversions or hiversions[title] < self.version:
             hiversions[title] = self.version
-    
+            pageNames[title] = self
+
     def title_or_id(self):
         return self.title or '[ID:%s]' % (self.id)
 
@@ -148,7 +151,7 @@ def make_internal_link(page_name, soup):
     return tag
 
 def make_internal_link_p(page, soup):
-    tag = soup.new_tag("a", href=build_path(page).replace('/', ':').replace('pages:current:', ':'))
+    tag = soup.new_tag("a", href=page.tag)
     tag.string = page.title
     return tag
 
@@ -211,6 +214,7 @@ def convert(confluence, page):
                 if linkedPageTitle in pageNames:
                     pp.replace_with(make_internal_link_p(pageNames[linkedPageTitle], soup))
                 else:
+                    print('%s not in pageNames' % linkedPageTitle)
                     pp.replace_with(make_internal_link(linkedPageTitle, soup))
             else:
                 raise Exception("Page found that is not a link")
@@ -242,7 +246,7 @@ def build_path(page: Page):
     pathname = [page.filename]
     while page.parent is not None:
         page = pages[page.parent]
-        pathname.insert(0, page_name_to_filename(page.filename))
+        pathname.insert(0, page.filename)
     pathname.insert(0, status)
     pathname.insert(0, 'Pages')
     pathname = '/'.join(pathname)
@@ -350,7 +354,10 @@ def addPage(obj, is_blog=False):
 
 
 def page_name_to_filename(pagename):
-    return pagename.replace("'", "").replace('"', '').replace("?","").replace(":","").lower()
+    s = pagename.replace('/', '-').replace(' ', '_')
+    s = re.sub(r'\W+', '', s).lower()
+    s = re.sub(r'_+', '_', s)
+    return s
 
 
 report_empty_pages = False
@@ -390,8 +397,16 @@ print ('Processing and exporting into markdown...')
 count = 0
 totalcount = len(pages)
 percent = int(totalcount/100)
-for x in pages:
-    p = pages[x]
+
+# Make a pass to find full 'pathnames' for files.
+for x in pageNames:
+    p = pageNames[x]
+    p.pathname = build_path(p)
+    p.tag = p.pathname.replace('/', ':').replace('pages:current', ':oldwiki')
+    print(p.tag, p.pathname, p.title)
+
+for x in pageNames:
+    p = pageNames[x]
     count+=1
     if (count % percent == 0):
         print ('%s pages exported (%s%%)' % (count, round(count*100/totalcount)))
@@ -401,8 +416,8 @@ for x in pages:
     # skip if not latest version
     if not p.is_latest(): continue
     # get the path and content
-    pathname = build_path(p)
-    filename = page_name_to_filename(pathname) + '.txt'
+    pathname = p.pathname
+    filename = pathname + '.txt'
     converted_confl = convert(PageContent[p.bodyId], p)
     # print ('\n' + converted_confl + '\n')
     markdown = markdownify(converted_confl)
@@ -412,7 +427,7 @@ for x in pages:
     # print('%s --> %s' % (p.title_or_id(), filename))
 
     # write the markdown to file
-    os.makedirs(os.path.dirname(build_path(p)), exist_ok=True)
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
 
     f = open(filename, 'w', encoding="utf-8")
     f.write(markdown)
