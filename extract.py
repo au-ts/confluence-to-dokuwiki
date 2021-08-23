@@ -2,6 +2,7 @@
 import sys
 import os
 import shutil
+from mappings import userMapping
 import xml.etree.ElementTree as ET
 from markdownify import markdownify
 from bs4 import BeautifulSoup
@@ -28,11 +29,14 @@ from bs4 import BeautifulSoup
 # in its history. Here we keep track of the highest version
 # (i.e. most current) page.
 hiversions={}
-
 users={}
-
 attachments = {}
+pageNames = {}
 
+def localname(csiro_id):
+    if csiro_id in userMapping:
+        return userMapping[csiro_id]
+    return csiro_id
 
 # Eventually add in an ldap lookup to convert to local user 
 class ConfluenceUser:
@@ -40,8 +44,9 @@ class ConfluenceUser:
         self.id = id
         self.email = email
         self.first = first
-        self.last = last 
-        self.userid = userid or first + '_' + last
+        self.last = last
+        login = localname(userid)
+        self.userid = login or first + '_' + last
         users[id] = self
 
     def __str__(self):
@@ -64,6 +69,7 @@ class Page:
             self.filename = title.replace(' ', '_').replace('&', 'and').replace('/','_')
         else:
             self.filename = '__unknown__'
+        pageNames[title] = self
         if title not in hiversions or hiversions[title] < self.version:
             hiversions[title] = self.version
     
@@ -137,8 +143,13 @@ def make_attachment_image(link_name, soup, page):
     return tag
 
 def make_internal_link(page_name, soup):
-    tag = soup.new_tag("a", href=page_name_to_filename(page_name))
+    tag = soup.new_tag("a", href=page_name_to_filename(page_name).replace('/', ':').replace('pages:', ':'))
     tag.string = page_name
+    return tag
+
+def make_internal_link_p(page, soup):
+    tag = soup.new_tag("a", href=build_path(page).replace('/', ':').replace('pages:current:', ':'))
+    tag.string = page.title
     return tag
 
 
@@ -165,6 +176,8 @@ def convert(confluence, page):
                 raise Exception("malformed user")
         pp=ll.parent
         if pp.name == 'ac:link':
+            if user in users:
+                user = users[user].userid
             pp.replace_with('@' + user)
         else:
             raise Exception("User found that is not a link")
@@ -178,7 +191,8 @@ def convert(confluence, page):
             pp.replace_with(make_attachment_link(link_filename, soup, page))
         elif pp.name == 'ac:image':
             pp.replace_with(make_attachment_image(link_filename, soup, page))
-        elif hasattr(pp.parent, 'ac:name') and pp.parent['ac:name'] == 'view-file' or pp.parent['ac:name'] == 'viewpdf':
+        elif hasattr(pp.parent, 'ac:name') and \
+            pp.parent['ac:name'] == 'view-file' or pp.parent['ac:name'] == 'viewpdf':
             # other types of file embeds, which we will just make into attachment links
             pp.replace_with(make_attachment_link(link_filename, soup, page))
         else:
@@ -194,7 +208,10 @@ def convert(confluence, page):
             pp = link.parent
             if (pp.name == 'ac:link'):
                 linkedPageTitle = link['ri:content-title']
-                pp.replace_with(make_internal_link(linkedPageTitle, soup))
+                if linkedPageTitle in pageNames:
+                    pp.replace_with(make_internal_link_p(pageNames[linkedPageTitle], soup))
+                else:
+                    pp.replace_with(make_internal_link(linkedPageTitle, soup))
             else:
                 raise Exception("Page found that is not a link")
 
@@ -229,15 +246,7 @@ def build_path(page: Page):
     pathname.insert(0, status)
     pathname.insert(0, 'Pages')
     pathname = '/'.join(pathname)
-    return pathname
-
-
-
-
-
-
-
-
+    return pathname.lower()
 
 # ------------ load entities.xml ------------
 
@@ -341,7 +350,7 @@ def addPage(obj, is_blog=False):
 
 
 def page_name_to_filename(pagename):
-    return pagename.replace("'", "").replace('"', '').replace("?","").replace(":","")
+    return pagename.replace("'", "").replace('"', '').replace("?","").replace(":","").lower()
 
 
 report_empty_pages = False
@@ -393,7 +402,7 @@ for x in pages:
     if not p.is_latest(): continue
     # get the path and content
     pathname = build_path(p)
-    filename = page_name_to_filename(pathname) + '=' + str(p.version) + '.md'
+    filename = page_name_to_filename(pathname) + '.txt'
     converted_confl = convert(PageContent[p.bodyId], p)
     # print ('\n' + converted_confl + '\n')
     markdown = markdownify(converted_confl)
