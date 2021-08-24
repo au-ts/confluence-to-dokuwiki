@@ -33,6 +33,7 @@ hiversions={}
 users={}
 attachments = {}
 pageNames = {}
+outDated = []
 
 def localname(csiro_id):
     if csiro_id in userMapping:
@@ -66,6 +67,7 @@ class Page:
         self.status = status
         self.attaches = attaches
         pages[id] = self
+        self.history = []
         if title:
             self.filename = page_name_to_filename(title)
         else:
@@ -156,21 +158,25 @@ def make_internal_link_p(page, soup):
     tag.string = page.title
     return tag
 
-
-def make_toc(page: Page):
-    soup = BeautifulSoup('', features='lxml');
-    title = soup.new_tag("h1")
-    title.string = page.title
-    soup.insert(0, title)
+def make_toc(page: Page, soup):
+    hh = soup.new_tag("h2")
+    hh.string = "Pages below this page:"
+    soup.append(hh)
     toc = soup.new_tag("ul")
     for child in page.children:
         li = soup.new_tag("li")
         li.append(make_internal_link_p(child, soup))
         toc.append(li)
     soup.append(toc)
+    return soup
+
+def make_toc_page(page: Page):
+    soup = BeautifulSoup('', features='lxml');
+    title = soup.new_tag("h1")
+    title.string = page.title
+    soup.insert(0, title)
+    make_toc(page, soup)
     return str(soup)
-        
-                
 
 # run this before markdownify.
 # 'confluence' is the PageContent for a page
@@ -178,13 +184,16 @@ def make_toc(page: Page):
 # by converting some special confluence macros into normal HTML
 def convert(confluence, page):
     if confluence == '':
-        return make_toc(page)
-    if page.title == "Students":
-        print("Students page.  Confluence='%s'" % confluence)
+        return make_toc_page(page)
     soup = BeautifulSoup(confluence, features="lxml")
     title = soup.new_tag("h1")
     title.string = page.title
     soup.insert(0, title)
+
+    if len(page.children):
+        toc = BeautifulSoup("", features="lxml")
+        toc = make_toc(page, toc)
+        soup.insert(1, toc)
 
     # Users
     allusers = soup.find_all('ri:user')
@@ -370,8 +379,14 @@ def addPage(obj, is_blog=False):
             attaches.append(attachments[attachid])
     
     # create a Page (will add itself to 'pages')
-    Page(id, parent, version, bodyId, title, status, attaches)
-
+    pp = Page(id, parent, version, bodyId, title, status, attaches)
+    oldVersions = obj.find('collection[@name="historicalVersions"]')
+    if oldVersions is None:
+        return
+    for v in oldVersions.findall('element[@class="Page"]'):
+        oldId = v.find('id').text
+        pp.history.append(oldId)
+        outDated.append(oldId)
 
 def page_name_to_filename(pagename):
     s = pagename.replace('/', '-').replace(' ', '_')
@@ -419,13 +434,14 @@ totalcount = len(pages)
 percent = int(totalcount/100)
 
 # Make a pass to find full 'pathnames' for files, and to create child lists
-for x in pageNames:
-    p = pageNames[x]
+for x, p in list(pageNames.items()):
+    if p.id in outDated:
+        del(pageNames[x])
+        continue
     p.pathname = build_path(p)
     p.tag = p.pathname.replace('/', ':').replace('pages:current', ':oldwiki')
     #print(p.tag, p.pathname, p.title)
-    if p.parent in pages:
-        print("Add %s to %s\n" % (p.title, pages[p.parent].title))
+    if p.parent in pages and p.status == "current":
         pages[p.parent].children.append(p)
         
 
