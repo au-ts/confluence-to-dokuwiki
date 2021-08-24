@@ -72,6 +72,7 @@ class Page:
             self.filename = '__unknown__'
         self.fullpath = self.filename
         self.tag = self.filename
+        self.children = []
         if title not in hiversions or hiversions[title] < self.version:
             hiversions[title] = self.version
             pageNames[title] = self
@@ -156,11 +157,30 @@ def make_internal_link_p(page, soup):
     return tag
 
 
+def make_toc(page: Page):
+    soup = BeautifulSoup('', features='lxml');
+    title = soup.new_tag("h1")
+    title.string = page.title
+    soup.insert(0, title)
+    toc = soup.new_tag("ul")
+    for child in page.children:
+        li = soup.new_tag("li")
+        li.append(make_internal_link_p(child, soup))
+        toc.append(li)
+    soup.append(toc)
+    return str(soup)
+        
+                
+
 # run this before markdownify.
 # 'confluence' is the PageContent for a page
 # this is for processing some special things before html2markdown
 # by converting some special confluence macros into normal HTML
 def convert(confluence, page):
+    if confluence == '':
+        return make_toc(page)
+    if page.title == "Students":
+        print("Students page.  Confluence='%s'" % confluence)
     soup = BeautifulSoup(confluence, features="lxml")
     title = soup.new_tag("h1")
     title.string = page.title
@@ -398,12 +418,16 @@ count = 0
 totalcount = len(pages)
 percent = int(totalcount/100)
 
-# Make a pass to find full 'pathnames' for files.
+# Make a pass to find full 'pathnames' for files, and to create child lists
 for x in pageNames:
     p = pageNames[x]
     p.pathname = build_path(p)
     p.tag = p.pathname.replace('/', ':').replace('pages:current', ':oldwiki')
-    print(p.tag, p.pathname, p.title)
+    #print(p.tag, p.pathname, p.title)
+    if p.parent in pages:
+        print("Add %s to %s\n" % (p.title, pages[p.parent].title))
+        pages[p.parent].children.append(p)
+        
 
 for x in pageNames:
     p = pageNames[x]
