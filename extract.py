@@ -36,6 +36,28 @@ attachmentIndex = {}
 pageNames = {}
 outDated = []
 
+emoticons_symbols = {
+    "smile" : ":-)",
+    "information": "ⓘ",
+    "red-star": '<span style="color:red">٭</span>',
+    "yellow-star": '<span style="color:yellow">٭</span>',
+    "minus": "---",
+    "tick": "✓",
+    "cross" : "❌",
+    "cheeky" : ":‑p",
+    "laugh": ":-D",
+    "wink" : ";‑)",
+    "sad" : ":‑(",
+    "question" : ":?:",
+    "tongue": ":-P",
+    "big grin": "=)",
+    ":slightly_smiling_face:" : ":-|",
+    "thumbs-up": "👍",
+    "thumbs-down": "👎",
+    "warning" : "⚠",
+    
+}
+
 def localname(csiro_id):
     if csiro_id in userMapping:
         return userMapping[csiro_id]
@@ -185,7 +207,7 @@ def make_toc_page(page: Page):
 
 def make_attachment_index(page: Page, unref_attachments):
     soup = BeautifulSoup('')
-    if len(attachments) == 0:
+    if len(unref_attachments) == 0:
         return soup
     title = soup.new_tag('h2')
     title.string = "Attachments"
@@ -197,6 +219,70 @@ def make_attachment_index(page: Page, unref_attachments):
         idx.append(li)
     soup.append(idx)
     return soup
+
+# DokuWiki always inserts a table of contents, so just delete the macro
+def toc_macro(soup, page):
+    return ''
+
+# Assumes the subpages plugin is installed
+def subpages_macro(soup, page):
+    return '\n~~~SUBPAGES~~~\n'
+
+# Just elide the macro, replace with contents
+def null_macro(soup, page):
+    return soup.find('ac:rich-text-body')
+    
+def attachments_macro(soup, page):
+    return make_attachment_index(page, page.attaches)
+
+def code_macro(soup, page):
+    lang = soup.find_all(attrs = {"ac:name", "language"})
+    if lang:
+        lang = lang.text
+    else:
+        lang = ''
+    content = soup.find('ac:plain-text-body').text
+    replace = '```' + lang
+    content = re.sub(r'^<!\[CDATA\[(.*)\]\]', replace + r'\n\1\n```', content)
+    return content
+
+def gallery_macro(soup, page):
+    return 'Insert Gallery Here'
+
+# The status macro encloses its arg in a coloured box.
+def status_macro(soup, page):
+    colour = soup.find_all(attrs={'ac:name', 'colour'})
+    if colour:
+        colourStyle = 'padding:2px; background-color:' + colour.string + ';'
+        print('Colour styling %s' % colourStyle)
+        colour.replace_with('')
+    else:
+        colourStyle = ''
+    content = soup.get_text()
+    if content is None:
+        return ''
+    soup = BeautifulSoup('')
+    span = soup.new_tag('span')
+    span.attrs['style'] = '%s font-size:130%%; border=2px;' % colourStyle
+    span.string = content
+    soup.append(span)
+    return soup
+    
+
+handleMacro = {
+    'code' : code_macro,
+    'gallery': gallery_macro,
+    'toc' : toc_macro,
+    'attachments': attachments_macro,
+    'expand': null_macro,
+    # consider adding the columns plugin to DokuWiki and generating the
+    # appropriate markup
+    'section': null_macro,
+    'column': null_macro,
+    'panel' : null_macro,
+    'children': subpages_macro,
+    'status':status_macro,
+    }
 
 # run this before markdownify.
 # 'confluence' is the PageContent for a page
@@ -293,6 +379,45 @@ def convert(confluence, page):
                 if (completed):
                     body.insert(0, "[COMPLETE] ")
             tl.name = "ul"
+
+    #emoticons 1
+    emoticons = soup.find_all(attrs = {"class": "emoticon"})
+    if len(emoticons):
+        for em in emoticons:
+            ti = em.attrs["title"].strip('()')
+            if ti in emoticons_symbols:
+                em.replace_with(emoticons_symbols[ti])
+            else:
+                print("Unknown emoticon :%s:" % ti)
+                em.replace_with(':%s:' % ti)
+
+    emoticons = soup.find_all('ac:emoticon')
+    if len(emoticons):
+        for em in emoticons:
+            ti = em['ac:name']
+            if ti in emoticons_symbols:
+                em.replace_with(emoticons_symbols[ti])
+            else:
+                print("Unknown emoticon :%s:" % ti)
+                em.replace_with(':%s:' % ti)
+
+
+    # macros blocks
+    macros = soup.find_all('ac:structured-macro')
+    if len(macros):
+        for cc in macros:
+            name = cc['ac:name']
+            if name in handleMacro:
+                cc.replace_with(handleMacro[name](cc, page))
+            else:
+                print("Unhandled macro %s in page '%s'" % (
+                    name, page.title))
+                x = re.sub(r'<', r'&#60;', str(cc))
+                x = re.sub(r'>', r'&#62;', x)
+                cc.wrap(soup.new_tag('pre'))
+                cc.replace_with(x)
+                
+            
     return str(soup)
 
 # given a Page, build a filepath for that page,
