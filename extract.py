@@ -32,6 +32,7 @@ from bs4 import BeautifulSoup
 hiversions={}
 users={}
 attachments = {}
+attachmentIndex = {}
 pageNames = {}
 outDated = []
 
@@ -90,6 +91,7 @@ class Attachment:
         self.id = id
         self.title = title
         attachments[id] = self
+        attachmentIndex[title] = self
 
     def __str__(self):
         return 'Attachment %s: "%s"' % (self.id, self.title)
@@ -109,7 +111,10 @@ def sanitise_link_name(linkname):
     return linkname.replace(":", "")
 
 def rename_attachment_file(filename, safe_filename, page):
-    attach_id = find_attachment_in_page(filename, page)
+    try:
+        attach_id = attachmentIndex[filename].id
+    except:
+        attach_id = '0'
     dir = 'attachments/%s/%s' % (page.id, attach_id)
     # get all files
     try: files = [f for f in os.listdir(dir)]
@@ -178,6 +183,21 @@ def make_toc_page(page: Page):
     make_toc(page, soup)
     return str(soup)
 
+def make_attachment_index(page: Page, unref_attachments):
+    soup = BeautifulSoup('')
+    if len(attachments) == 0:
+        return soup
+    title = soup.new_tag('h2')
+    title.string = "Attachments"
+    soup.append(title)
+    idx = soup.new_tag('ul')
+    for x in unref_attachments:
+        li = soup.new_tag('li')
+        li.append(make_attachment_link(x.title, soup, page))
+        idx.append(li)
+    soup.append(idx)
+    return soup
+
 # run this before markdownify.
 # 'confluence' is the PageContent for a page
 # this is for processing some special things before html2markdown
@@ -215,10 +235,15 @@ def convert(confluence, page):
             raise Exception("User found that is not a link")
 
     # Attachments
+    unhandled = set(page.attaches)
     allattachments = soup.find_all('ri:attachment')
     for ll in allattachments:
         link_filename = ll['ri:filename']
         pp=ll.parent
+        if link_filename in attachmentIndex:
+            id = attachmentIndex[link_filename]
+            if id in unhandled:
+                unhandled.remove(id)
         if pp.name == 'ac:link':
             pp.replace_with(make_attachment_link(link_filename, soup, page))
         elif pp.name == 'ac:image':
@@ -232,6 +257,8 @@ def convert(confluence, page):
             print(pp)
             print (pp.parent)
             raise Exception("Attachment found that is neither link nor image")
+
+    soup.append(make_attachment_index(page, unhandled))
 
     # Internal Links
     allintlinks = soup.find_all('ri:page')
