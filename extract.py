@@ -5,10 +5,29 @@ import shutil
 import re
 from mappings import userMapping
 import xml.etree.ElementTree as ET
-from markdownify import markdownify
+from markdownify import MarkdownConverter
 from bs4 import BeautifulSoup
 # also required: LXML (pip install lxml)
 
+class ConfluenceConverter(MarkdownConverter):
+    """
+    Pass thorough some macros
+    """
+    def convert_panel(self, el, text, convert_as_inline):
+        title =  el.get('title')
+        if title:
+            title = 'title="%s"' % title
+        else:
+            title = ''
+        tt = el.get('type')
+        if tt:
+            tt = 'type="%s" ' % tt
+        else:
+            tt = ''
+        return "<panel %s %s>%s</panel>" % (title, tt, text)
+
+def md(html, **options):
+    return ConfluenceConverter(**options).convert(html)
 
 
 # WHAT THIS DOES
@@ -51,7 +70,7 @@ emoticons_symbols = {
     "question" : ":?:",
     "tongue": ":-P",
     "big grin": "=)",
-    ":slightly_smiling_face:" : ":-|",
+    "slightly_smiling_face" : ":-|",
     "thumbs-up": "👍",
     "thumbs-down": "👎",
     "warning" : "⚠",
@@ -198,7 +217,7 @@ def make_toc(page: Page, soup):
     return soup
 
 def make_toc_page(page: Page):
-    soup = BeautifulSoup('', features='lxml');
+    soup = BeautifulSoup('');
     title = soup.new_tag("h1")
     title.string = page.title
     soup.insert(0, title)
@@ -237,14 +256,20 @@ def attachments_macro(soup, page):
 
 def code_macro(soup, page):
     lang = soup.find_all(attrs = {"ac:name", "language"})
+    body = soup.find('ac:plain-text-body')
+    if body is None:
+        print('Page %s: macro has no plain-text-body' % page.title)
+        print('"""' + '\n'.join(soup.contents) + '"""')
+        return soup
+    content = body.contents
+    soup = BeautifulSoup('')
+    pre = soup.new_tag('pre')
+    code = soup.new_tag('code')
     if lang:
-        lang = lang.text
-    else:
-        lang = ''
-    content = soup.find('ac:plain-text-body').text
-    replace = '```' + lang
-    content = re.sub(r'^<!\[CDATA\[(.*)\]\]', replace + r'\n\1\n```', content)
-    return content
+        code['language'] = lang.string
+    code.contents = content
+    pre.append(code)
+    return pre
 
 def gallery_macro(soup, page):
     return 'Insert Gallery Here'
@@ -268,9 +293,44 @@ def status_macro(soup, page):
     soup.append(span)
     return soup
     
+def box_macro(soup, page, boxtype, title = None):
+    content = soup.find('ac:rich-text-body').contents
+    soup = BeautifulSoup('')
+    panel = soup.new_tag('panel')
+    panel['type'] = boxtype
+    if title:
+        panel['title'] = title
+    panel.contents = content
+    return panel
+
+def info_macro(soup, page):
+    return box_macro(soup, page, 'info');
+
+def tip_macro(soup, page):
+    return box_macro(soup, page, 'default', title = 'tip');
+
+def warning_macro(soup, page):
+    return box_macro(soup, page, 'warning');
+
+def danger_macro(soup, page):
+    return box_macro(soup, page, 'danger');
+
+def note_macro(soup, page):
+    return box_macro(soup, page, 'default', title='Note');
+
+def panel_macro(soup, page):
+    title = soup.find('ac:parameter', attrs={'ac:name', 'title'})
+    body = soup.find('ac:rich-text-body').contents
+    soup = BeautifulSoup('')
+    panel = soup.new_tag('panel')
+    if title:
+        panel['title'] = title.string
+    soup.contents = body
+    return soup
 
 handleMacro = {
     'code' : code_macro,
+    'noformat': code_macro,
     'gallery': gallery_macro,
     'toc' : toc_macro,
     'attachments': attachments_macro,
@@ -279,9 +339,14 @@ handleMacro = {
     # appropriate markup
     'section': null_macro,
     'column': null_macro,
-    'panel' : null_macro,
+    'panel' : panel_macro,
     'children': subpages_macro,
     'status':status_macro,
+    'info': info_macro,
+    'tip': tip_macro,
+    'note': note_macro,
+    'warning': warning_macro,
+    'danger': danger_macro
     }
 
 # run this before markdownify.
@@ -291,13 +356,13 @@ handleMacro = {
 def convert(confluence, page):
     if confluence == '':
         return make_toc_page(page)
-    soup = BeautifulSoup(confluence, features="lxml")
+    soup = BeautifulSoup(confluence, "html.parser")
     title = soup.new_tag("h1")
     title.string = page.title
     soup.insert(0, title)
 
     if len(page.children):
-        toc = BeautifulSoup("", features="lxml")
+        toc = BeautifulSoup("")
         toc = make_toc(page, toc)
         soup.insert(1, toc)
 
@@ -384,7 +449,7 @@ def convert(confluence, page):
     emoticons = soup.find_all(attrs = {"class": "emoticon"})
     if len(emoticons):
         for em in emoticons:
-            ti = em.attrs["title"].strip('()')
+            ti = em.attrs["title"].strip('():')
             if ti in emoticons_symbols:
                 em.replace_with(emoticons_symbols[ti])
             else:
@@ -612,7 +677,7 @@ for x in pageNames:
     filename = pathname + '.txt'
     converted_confl = convert(PageContent[p.bodyId], p)
     # print ('\n' + converted_confl + '\n')
-    markdown = markdownify(converted_confl)
+    markdown = md(converted_confl)
     # print ('\n--------------------\n\n\n' + markdown + '\n')
 
     # markdown = "meow"
