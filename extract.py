@@ -39,7 +39,7 @@ def md(html, **options):
 # Also, attachments are found (from the export) in:
 #  attachments / PageID / AttachmentID / version (files)
 # This script currently renames the highest version of each
-# attachment, in the existing folder, to the appropriate filename
+# attachment, to the appropriate filename
 # (when that attachment is referenced).
 # 
 
@@ -116,6 +116,7 @@ class Page:
             self.filename = '__unknown__'
         self.fullpath = self.filename
         self.tag = self.filename
+        self.namespace = ':oldwiki'
         self.children = []
         if title not in hiversions or hiversions[title] < self.version:
             hiversions[title] = self.version
@@ -131,6 +132,8 @@ class Attachment:
     def __init__(self, id, title):
         self.id = id
         self.title = title
+        self.page = None        
+        self.filename = ''
         attachments[id] = self
         attachmentIndex[title] = self
 
@@ -151,11 +154,7 @@ def find_attachment_in_page(link_name, page):
 def sanitise_link_name(linkname):
     return linkname.replace(":", "")
 
-def rename_attachment_file(filename, safe_filename, page):
-    try:
-        attach_id = attachmentIndex[filename].id
-    except:
-        attach_id = '0'
+def rename_attachment_file(attach_id, safe_filename, page):
     dir = 'attachments/%s/%s' % (page.id, attach_id)
     # get all files
     try: files = [f for f in os.listdir(dir)]
@@ -171,27 +170,34 @@ def rename_attachment_file(filename, safe_filename, page):
                 max_filenum = f_num
         except: pass
     orig_filepath = os.path.join(dir, str(max_filenum))
-    new_filepath  = os.path.join(dir, safe_filename)
-    shutil.copy(orig_filepath, new_filepath)
+    os.makedirs(os.path.dirname(safe_filename), exist_ok=True)
+    shutil.copy(orig_filepath, safe_filename)
 
 # TODO: the files are actually just called 1/2/3 etc (no extension)
 # these names seem to be version names, so I think we should rename/copy the highest numbered file
 # to the appropriate filename, maybe even as part of this function
 def make_attachment_link(link_name, soup, page):
-    safe_link_name = sanitise_link_name(link_name)
-    rename_attachment_file(link_name, safe_link_name, page)
     attach_id = find_attachment_in_page(link_name, page)
-    full_url = 'attachments/%s/%s/%s' % (page.id, attach_id, link_name)
-    tag = soup.new_tag("a", href=full_url)
+    if attach_id == '0':
+        print("Can't find attachment %s" % link_name)
+        return link_name
+    attachment = attachments[attach_id]
+    if attachment.filename == '':
+        attachment.filename = page.filename.replace('pages/current/', 'media/') +\
+        '/' + page_name_to_filename(attachment.title)
+    rename_attachment_file(attach_id, attachment.filename, page)
+    tag = soup.new_tag("a", href=attachment.filename.replace('/', ':'))
     tag.string = link_name
     return tag
 
 def make_attachment_image(link_name, soup, page):
-    safe_link_name = sanitise_link_name(link_name)
-    rename_attachment_file(link_name, safe_link_name, page)
     attach_id = find_attachment_in_page(link_name, page)
-    full_url = 'attachments/%s/%s/%s' % (page.id, attach_id, link_name)
-    tag = soup.new_tag("img", src=full_url)
+    if attach_id == '0':
+        print("Can't find image %s" % link_name)
+        return 'IMAGE:  ' + link_name
+    attachment = attachments[attach_id]
+    rename_attachment_file(attach_id, attachment.filename, page)
+    tag = soup.new_tag("img", src=attachment.filename.replace('/', ':'))
     return tag
 
 def make_internal_link(page_name, soup):
@@ -395,14 +401,23 @@ def convert(confluence, page):
             id = attachmentIndex[link_filename]
             if id in unhandled:
                 unhandled.remove(id)
+        parent_id = ll.find('ri:content-entity')
+        if parent_id:
+            if parent_id in pages:
+                apage  = pages[parent_id['ri:content-id']]
+            else:
+                # reference is to a page outside the dump
+                apage = page 
+        else:
+            apage = page
         if pp.name == 'ac:link':
-            pp.replace_with(make_attachment_link(link_filename, soup, page))
+            pp.replace_with(make_attachment_link(link_filename, soup, apage))
         elif pp.name == 'ac:image':
-            pp.replace_with(make_attachment_image(link_filename, soup, page))
+            pp.replace_with(make_attachment_image(link_filename, soup, apage))
         elif hasattr(pp.parent, 'ac:name') and \
             pp.parent['ac:name'] == 'view-file' or pp.parent['ac:name'] == 'viewpdf':
             # other types of file embeds, which we will just make into attachment links
-            pp.replace_with(make_attachment_link(link_filename, soup, page))
+            pp.replace_with(make_attachment_link(link_filename, soup, apage))
         else:
             print ("unrecognised attachment:")
             print(pp)
@@ -607,7 +622,7 @@ def addPage(obj, is_blog=False):
 
 def page_name_to_filename(pagename):
     s = pagename.replace('/', '-').replace(' ', '_')
-    s = re.sub(r'\W+', '', s).lower()
+    s = re.sub(r'[^A-Za-z0-9_.]+', '', s).lower()
     s = re.sub(r'_+', '_', s)
     return s
 
@@ -644,24 +659,28 @@ for obj in root.findall('object[@class="BodyContent"]'):
     content = obj.find('property[@name="body"]').text or ''
     PageContent[id] = content
 
-print ('Processing and exporting into markdown...')
 # Dump pages and content (only first 10 for now)
 count = 0
 totalcount = len(pages)
 percent = int(totalcount/100)
 
 # Make a pass to find full 'pathnames' for files, and to create child lists
+print('Creating page and attachment hierarchy ...')
 for x, p in list(pageNames.items()):
-    if p.id in outDated:
-        del(pageNames[x])
-        continue
     p.pathname = build_path(p)
     p.tag = p.pathname.replace('/', ':').replace('pages:current', ':oldwiki')
     #print(p.tag, p.pathname, p.title)
     if p.parent in pages and p.status == "current":
         pages[p.parent].children.append(p)
-        
+    for attachment in p.attaches:
+        attachment.page = p
+        attachment.filename = p.pathname.replace('pages/current', 'media/oldwiki') +\
+            page_name_to_filename(attachment.title)
+    if p.id in outDated:
+        del(pageNames[x])
 
+
+print ('Processing and exporting into markdown...')
 for x in pageNames:
     p = pageNames[x]
     count+=1
