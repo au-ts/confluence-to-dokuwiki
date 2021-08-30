@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 import os
-import shutil
 import re
 from mappings import userMapping
 import xml.etree.ElementTree as ET
@@ -171,7 +170,10 @@ def rename_attachment_file(attach_id, safe_filename, page):
         except: pass
     orig_filepath = os.path.join(dir, str(max_filenum))
     os.makedirs(os.path.dirname(safe_filename), exist_ok=True)
-    shutil.copy(orig_filepath, safe_filename)
+    try:
+        os.link(orig_filepath, safe_filename)
+    except:
+        pass
 
 # TODO: the files are actually just called 1/2/3 etc (no extension)
 # these names seem to be version names, so I think we should rename/copy the highest numbered file
@@ -186,8 +188,7 @@ def make_attachment_link(link_name, soup, page):
         attachment.filename = page.filename.replace('pages/current/', 'media/') +\
         '/' + page_name_to_filename(attachment.title)
     rename_attachment_file(attach_id, attachment.filename, page)
-    tag = soup.new_tag("a", href=attachment.filename.replace('/', ':'))
-    tag.string = link_name
+    tag = "{{%s|%s}}" % (attachment.filename.replace('media/', '').replace('/', ':'), link_name)
     return tag
 
 def make_attachment_image(link_name, soup, page):
@@ -197,17 +198,18 @@ def make_attachment_image(link_name, soup, page):
         return 'IMAGE:  ' + link_name
     attachment = attachments[attach_id]
     rename_attachment_file(attach_id, attachment.filename, page)
-    tag = soup.new_tag("img", src=attachment.filename.replace('/', ':'))
+    fn = attachment.filename
+    if fn.startswith('media/'):
+        fn = fn[5:]
+    tag = "{{%s|%s}}" % (fn.replace('/', ':'), link_name)
     return tag
 
 def make_internal_link(page_name, soup):
-    tag = soup.new_tag("a", href=page_name_to_filename(page_name).replace('/', ':').replace('pages:', ':'))
-    tag.string = page_name
+    tag = '[[%s|%s]]' % (page_name_to_filename(page_name).replace('/', ':').replace('pages:', ':'), page_name)
     return tag
 
 def make_internal_link_p(page, soup):
-    tag = soup.new_tag("a", href=page.tag)
-    tag.string = page.title
+    tag = '[[%s|%s]]' % (page.tag, page.title)
     return tag
 
 def make_toc(page: Page, soup):
@@ -251,11 +253,11 @@ def toc_macro(soup, page):
 
 # Assumes the subpages plugin is installed
 def subpages_macro(soup, page):
-    return '\n~~~SUBPAGES~~~\n'
+    return '{{pglist> files dirs}}'
 
 # Just elide the macro, replace with contents
 def null_macro(soup, page):
-    return soup.find('ac:rich-text-body')
+    return soup.find('ac:rich-text-body') or ''
     
 def attachments_macro(soup, page):
     return make_attachment_index(page, page.attaches)
@@ -276,6 +278,10 @@ def code_macro(soup, page):
     code.contents = content
     pre.append(code)
     return pre
+
+def details_macro(soup, page):
+    body = soup.find('ac:rich-text-body')
+    return body
 
 def gallery_macro(soup, page):
     return 'Insert Gallery Here'
@@ -307,7 +313,8 @@ def box_macro(soup, page, boxtype, title = None):
     if title:
         panel['title'] = title
     panel.contents = content
-    return panel
+    soup.append(panel)
+    return soup
 
 def info_macro(soup, page):
     return box_macro(soup, page, 'info');
@@ -331,11 +338,32 @@ def panel_macro(soup, page):
     panel = soup.new_tag('panel')
     if title:
         panel['title'] = title.string
-    soup.contents = body
+    panel.contents = body
+    soup.append(panel)
+    return soup
+
+def column_macro(soup, page):
+    width = soup.find_all(attrs = {'ac:name': 'width'})
+    body = soup.find('ac:rich-text-body')
+    soup = BeautifulSoup('');
+    col = soup.new_tag('col')
+    col.contents = body.contents
+    if width:
+        col['lg'] = str(int(width[0].string.strip('%')) * 12 /100)
+    soup.append(col)
+    return soup
+
+def section_macro(soup, page):
+    body = soup.find('ac:rich-text-body')
+    soup = BeautifulSoup('')
+    row = soup.new_tag('row')
+    row.contents = body.contents
+    soup.append(row)
     return soup
 
 handleMacro = {
     'code' : code_macro,
+    'details' : details_macro,
     'noformat': code_macro,
     'gallery': gallery_macro,
     'toc' : toc_macro,
@@ -343,8 +371,9 @@ handleMacro = {
     'expand': null_macro,
     # consider adding the columns plugin to DokuWiki and generating the
     # appropriate markup
-    'section': null_macro,
-    'column': null_macro,
+    'anchor' : null_macro,
+    'section': section_macro,
+    'column': column_macro,
     'panel' : panel_macro,
     'children': subpages_macro,
     'status':status_macro,
@@ -488,6 +517,7 @@ def convert(confluence, page):
         for cc in macros:
             name = cc['ac:name']
             if name in handleMacro:
+                print('macro ' + name)
                 cc.replace_with(handleMacro[name](cc, page))
             else:
                 print("Unhandled macro %s in page '%s'" % (
@@ -674,8 +704,8 @@ for x, p in list(pageNames.items()):
         pages[p.parent].children.append(p)
     for attachment in p.attaches:
         attachment.page = p
-        attachment.filename = p.pathname.replace('pages/current', 'media/oldwiki') +\
-            page_name_to_filename(attachment.title)
+        attachment.filename = p.pathname.replace('pages/current', 'media/oldwiki') + \
+      '/' +  page_name_to_filename(attachment.title)
     if p.id in outDated:
         del(pageNames[x])
 
