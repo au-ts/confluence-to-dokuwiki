@@ -6,11 +6,37 @@ from mappings import userMapping
 import xml.etree.ElementTree as ET
 from markdownify import MarkdownConverter
 from bs4 import BeautifulSoup
-# also required: LXML (pip install lxml)
+# For user names
+import ldap
+
+ldapserver = 'ldap://ldap.keg.cse.unsw.edu.au'
+base = 'ou=Accounts,dc=keg,dc=cse,dc=unsw,dc=edu,dc=au'
+searchAttributes=['cn', 'uid']
+
+ld = ldap.initialize(ldapserver)
+ld.protocol_version = ldap.VERSION3
+searchFilter=[]
+for x in userMapping:
+    searchFilter.append('(uid=' + userMapping[x] + ')')
+searchFilter = '(|' + ''.join(searchFilter) + ')'
+
+# Build dictionary of uid->name from our ldap database
+LDAPusers = ld.search(base, ldap.SCOPE_SUBTREE, searchFilter, searchAttributes)
+LDAPuserName = {}
+while True:
+    result_type, result_data = ld.result(LDAPusers, 0)
+    if result_data == []:
+        break
+    if result_type == ldap.RES_SEARCH_ENTRY:
+        results = result_data[0][1]
+        if 'uid' in results:
+            uid = results['uid'][0].decode('utf-8')
+            name = results['cn'][0].decode('utf-8')
+            LDAPuserName[uid] = name
 
 class ConfluenceConverter(MarkdownConverter):
     """
-    Pass thorough some macros
+    Pass through some macros
     """
     def convert_panel(self, el, text, convert_as_inline):
         title =  el.get('title')
@@ -36,6 +62,7 @@ def md(html, **options):
 #   Pages / Status / Parent_Page / Child_Page / title=version.md
 # 
 # Also, attachments are found (from the export) in:
+
 #  attachments / PageID / AttachmentID / version (files)
 # This script currently renames the highest version of each
 # attachment, to the appropriate filename
@@ -86,9 +113,10 @@ class ConfluenceUser:
     def __init__(self, id, email, first, last, userid):
         self.id = id
         self.email = email
-        self.first = first
-        self.last = last
+        self.name = first + ' ' + last
         login = localname(userid)
+        if login in LDAPuserName:
+            self.name = LDAPuserName[login]
         self.userid = login or first + '_' + last
         users[id] = self
 
@@ -139,10 +167,10 @@ class Attachment:
     def __str__(self):
         return 'Attachment %s: "%s"' % (self.id, self.title)
 
-def get_userid(userkey):
+def get_user(userkey):
     if (userkey in users):
-        return users[userkey].userid
-    return 'UNKNOWN_USER'
+        return users[userkey]
+    return None
 
 def find_attachment_in_page(link_name, page):
     for a in page.attaches:
@@ -405,18 +433,23 @@ def convert(confluence, page):
     allusers = soup.find_all('ri:user')
     for ll in allusers:
         try:
-            user = get_userid(ll['ri:userkey'])
+            user = get_user(ll['ri:userkey'])
+            if user is None:
+                username = 'UnknownUser'
         except KeyError:
             try:
-                user = ll['ri:username']
+                user = None
+                username = ll['ri:username']
             except KeyError:
                 print (ll)
                 raise Exception("malformed user")
+       
         pp=ll.parent
         if pp.name == 'ac:link':
-            if user in users:
-                user = users[user].userid
-            pp.replace_with('@' + user)
+            if user:
+                pp.replace_with('[[user>%s|%s]]' % (user.userid, user.name))
+            else:
+                pp.replace_with('@' + username)
         else:
             raise Exception("User found that is not a link")
 
@@ -652,7 +685,7 @@ def addPage(obj, is_blog=False):
 
 def page_name_to_filename(pagename):
     s = pagename.replace('/', '-').replace(' ', '_')
-    s = re.sub(r'[^A-Za-z0-9_.]+', '', s).lower()
+    s = re.sub(r'[^-A-Za-z0-9_.]+', '', s).lower()
     s = re.sub(r'_+', '_', s)
     return s
 
