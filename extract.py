@@ -51,6 +51,15 @@ class ConfluenceConverter(MarkdownConverter):
             tt = ''
         return "<panel %s %s>%s</panel>" % (title, tt, text)
 
+    def convert_a(self, el, text, convert_as_inline):
+        href = el.get('href')
+        href = re.sub(r'ts\.data61\.csiro\.au', 'trustworthy.systems', str(href))
+        text = re.sub(r'ts\.data61\.csiro\.au', 'trustworthy.systems', str(text))
+        href = re.sub(r'ssrg\.nicta\.com\.au', 'trustworthy.systems', href)
+        hext = re.sub(r'ssrg\.nicta\.com\.au', 'trustworthy.systems', text)
+
+        return '[[%s|%s]]' % ( href, text)
+
 def md(html, **options):
     return ConfluenceConverter(**options).convert(html)
 
@@ -142,7 +151,7 @@ class Page:
         else:
             self.filename = '__unknown__'
         self.fullpath = self.filename
-        self.tag = self.filename
+        self.path = self.filename.replace('/', ':')
         self.namespace = ':oldwiki'
         self.children = []
         if title not in hiversions or hiversions[title] < self.version:
@@ -237,7 +246,7 @@ def make_internal_link(page_name, soup):
     return tag
 
 def make_internal_link_p(page, soup):
-    tag = '[[%s|%s]]' % (page.tag, page.title)
+    tag = '[[%s|%s]]' % (page.path, page.title)
     return tag
 
 def make_toc(page: Page, soup):
@@ -281,7 +290,8 @@ def toc_macro(soup, page):
 
 # Assumes the subpages plugin is installed
 def subpages_macro(soup, page):
-    return '{{pglist> files dirs}}'
+    components = page.path.split(':')
+    return '{{pglist>:%s: files dirs}}' % components[len(components)-1]
 
 # Just elide the macro, replace with contents
 def null_macro(soup, page):
@@ -731,13 +741,14 @@ percent = int(totalcount/100)
 print('Creating page and attachment hierarchy ...')
 for x, p in list(pageNames.items()):
     p.pathname = build_path(p)
-    p.tag = p.pathname.replace('/', ':').replace('pages:current', ':oldwiki')
+    p.path = p.pathname.replace('/', ':').replace('pages:current', ':oldwiki')
+    p.path = p.path.replace('pages:deleted:', 'oldwiki:deleted:')
     #print(p.tag, p.pathname, p.title)
     if p.parent in pages and p.status == "current":
         pages[p.parent].children.append(p)
     for attachment in p.attaches:
         attachment.page = p
-        attachment.filename = p.pathname.replace('pages/current', 'media/oldwiki') + \
+        attachment.filename = p.pathname.replace('pages/current', 'media/oldwiki').replace('pages/deleted', 'media/oldwiki/deleted') + \
       '/' +  page_name_to_filename(attachment.title)
     if p.id in outDated:
         del(pageNames[x])
